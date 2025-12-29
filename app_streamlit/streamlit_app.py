@@ -14,7 +14,7 @@ from typing import List
 try:
     import faiss
     FAISS_AVAILABLE = True
-except Exception:
+except ImportError:
     faiss = None
     FAISS_AVAILABLE = False
 
@@ -55,6 +55,8 @@ def load_vectorstore():
             texts = [d.get("text", "") for d in docs]
             if texts:
                 embeddings_np = np.array(model.encode(texts, show_progress_bar=False))
+                # Pre-normalize embeddings for faster cosine similarity computation
+                embeddings_np = embeddings_np / np.linalg.norm(embeddings_np, axis=1, keepdims=True)
         except Exception as e:
             st.warning(f"Error cargando embeddings.json en modo fallback: {e}")
             docs = []
@@ -83,10 +85,10 @@ def retrieve(query: str, top_k: int = 5):
     # Fallback: búsqueda por similitud en memoria usando numpy embeddings
     if embeddings_np is not None and len(embeddings_np) > 0:
         q_emb = model.encode([query], show_progress_bar=False)
-        # similitud coseno
-        q = q_emb / np.linalg.norm(q_emb, axis=1, keepdims=True)
-        emb_norm = embeddings_np / np.linalg.norm(embeddings_np, axis=1, keepdims=True)
-        sims = np.dot(emb_norm, q[0])
+        # Normalize query embedding for cosine similarity
+        q_norm = q_emb / np.linalg.norm(q_emb, axis=1, keepdims=True)
+        # embeddings_np is already normalized in load_vectorstore
+        sims = np.dot(embeddings_np, q_norm[0])
         top_idx = np.argsort(-sims)[:top_k]
         results = []
         for idx in top_idx:
