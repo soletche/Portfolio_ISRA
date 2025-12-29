@@ -6,3 +6,4 @@ pandas
 openai
 matplotlib
 tqdm
+numpy
