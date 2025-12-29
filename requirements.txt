@@ -1,6 +1,7 @@
 streamlit
 sentence-transformers
-#faiss-cpu
+#faiss-cpu  # Commented out to avoid build failures in HF Docker Spaces. App has fallback retrieval.
+numpy
 nbformat
 pandas
 openai
