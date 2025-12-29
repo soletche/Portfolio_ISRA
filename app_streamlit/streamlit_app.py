@@ -1,14 +1,22 @@
-# Streamlit app minimal para demo RAG + visual
+# Streamlit app minimal para demo RAG + visual (fallback si faiss no está instalado)
 import streamlit as st
 import base64
 import json
 import os
 from sentence_transformers import SentenceTransformer
-import faiss
+import numpy as np
 import openai
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import List
+
+# intentamos importar faiss; si no está disponible, usamos fallback en memoria
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except Exception:
+    faiss = None
+    FAISS_AVAILABLE = False
 
 # Config
 VECTORSTORE_PATH = "vectorstore.faiss"
@@ -26,25 +34,68 @@ def load_vectorstore():
     dim = model.get_sentence_embedding_dimension()
     index = None
     docs = []
-    if os.path.exists(VECTORSTORE_PATH) and os.path.exists(DOCS_PATH):
-        index = faiss.read_index(VECTORSTORE_PATH)
-        with open(DOCS_PATH, "r", encoding="utf-8") as f:
-            docs = json.load(f)
-    return model, index, docs
+    embeddings_np = None
 
-model, index, docs = load_vectorstore()
-if index is None:
-    st.warning("Vectorstore no encontrado. Corre scripts/index_data.py primero.")
-    st.stop()
+    # Si existe vectorstore + faiss instalado, leemos el index
+    if FAISS_AVAILABLE and os.path.exists(VECTORSTORE_PATH) and os.path.exists(DOCS_PATH):
+        try:
+            index = faiss.read_index(VECTORSTORE_PATH)
+            with open(DOCS_PATH, "r", encoding="utf-8") as f:
+                docs = json.load(f)
+        except Exception as e:
+            st.warning(f"Error leyendo vectorstore/faiss: {e}")
+            index = None
+            docs = []
+
+    # Si no hay faiss pero sí tenemos embeddings.json, cargamos docs y precomputamos embeddings en numpy (fallback)
+    elif os.path.exists(DOCS_PATH):
+        try:
+            with open(DOCS_PATH, "r", encoding="utf-8") as f:
+                docs = json.load(f)
+            texts = [d.get("text", "") for d in docs]
+            if texts:
+                embeddings_np = np.array(model.encode(texts, show_progress_bar=False))
+        except Exception as e:
+            st.warning(f"Error cargando embeddings.json en modo fallback: {e}")
+            docs = []
+            embeddings_np = None
+
+    return model, index, docs, embeddings_np
+
+model, index, docs, embeddings_np = load_vectorstore()
+
+if index is None and embeddings_np is None:
+    st.warning("Vectorstore no encontrado y faiss no está instalado. Puedes: 1) correr scripts/index_data.py y subir vectorstore.faiss + embeddings.json, 2) habilitar faiss en requirements y rebuild, o 3) seguir con demo sin recuperación avanzada.")
+    # No abortamos completamente; la UI sigue disponible para que pruebes otras partes.
+    # st.stop()  # opcional, pero lo dejamos comentado para que la página cargue.
 
 def retrieve(query: str, top_k: int = 5):
-    q_emb = model.encode([query])
-    D, I = index.search(q_emb, top_k)
-    results = []
-    for idx in I[0]:
-        if idx < len(docs):
-            results.append(docs[idx])
-    return results
+    # Si faiss está disponible y hay index, usamos faiss
+    if FAISS_AVAILABLE and index is not None:
+        q_emb = model.encode([query])
+        D, I = index.search(q_emb, top_k)
+        results = []
+        for idx in I[0]:
+            if idx < len(docs):
+                results.append(docs[idx])
+        return results
+
+    # Fallback: búsqueda por similitud en memoria usando numpy embeddings
+    if embeddings_np is not None and len(embeddings_np) > 0:
+        q_emb = model.encode([query], show_progress_bar=False)
+        # similitud coseno
+        q = q_emb / np.linalg.norm(q_emb, axis=1, keepdims=True)
+        emb_norm = embeddings_np / np.linalg.norm(embeddings_np, axis=1, keepdims=True)
+        sims = np.dot(emb_norm, q[0])
+        top_idx = np.argsort(-sims)[:top_k]
+        results = []
+        for idx in top_idx:
+            if idx < len(docs):
+                results.append(docs[int(idx)])
+        return results
+
+    # Si no hay nada, devolvemos vacío
+    return []
 
 def call_llm(prompt: str) -> str:
     key = OPENAI_KEY
