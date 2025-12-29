@@ -1,6 +1,6 @@
 streamlit
 sentence-transformers
-#faiss-cpu
+# faiss-cpu    # mantener comentado si el build falla; ver opción de pin si querés instalarlo
 nbformat
 pandas
 openai
